@@ -2,7 +2,7 @@ module WaterLilyMeshBodies
 
 using WaterLily
 import WaterLily: AbstractBody, SetBody, save!, update!
-using FileIO, MeshIO, StaticArrays
+using FileIO, MeshIO
 using ImplicitBVH, GeometryBasics
 
 struct Meshbody{T,M,B,F} <: AbstractBody
@@ -47,185 +47,11 @@ function MeshBody(mesh::Mesh; scale::T=1.f0, mem=Array, primitive=ImplicitBVH.BB
     MeshBody(mesh, zero(mesh), bvh; scale=T(scale), kwargs...)
 end
 
-using LinearAlgebra: cross
-# @fastmath @inline d²_fast(x::SVector,tri::SMatrix) = sum(abs2,x-center(tri))
-@fastmath @inline d²_fast(x::SVector,tri::SMatrix) = sum(abs2,x-locate(x,tri))
-@fastmath @inline normal(tri::SMatrix) = hat(SVector(cross(tri[:,2]-tri[:,1],tri[:,3]-tri[:,1])))
-@fastmath @inline hat(v) = v/(√(v'*v)+eps(eltype(v)))
-@fastmath @inline center(tri::SMatrix) = SVector(sum(tri,dims=2)/3)
-
-import ImplicitBVH: BoundingVolume,BBox,BSphere
-@fastmath @inline inside(x::SVector, b::BoundingVolume) = inside(x, b.volume)
-@fastmath @inline inside(x::SVector, b::BBox) = all(b.lo.-4 .≤ x) && all(x .≤ b.up.+4)
-@fastmath @inline inside(x::SVector, b::BSphere) = √sum(abs2,x .- b.x) - b.r ≤ 4
-
-import WaterLily: ×
-# linear shape function to interpolate inside element
-@fastmath @inline shape_value(p::SVector{3,T},t) where T = SA{T}[√sum(abs2,×(t[:,2]-p,t[:,3]-p))
-                                                                 √sum(abs2,×(p-t[:,1],t[:,3]-t[:,1]))
-                                                                 √sum(abs2,×(t[:,2]-t[:,1],p-t[:,1]))]
-@fastmath @inline get_velocity(p::SVector, tri, vel)= (dA=shape_value(p,tri); vel*dA/sum(dA))
-
-# brute-force fallback when the BVH is not available
-@inline closest(x::SVector,mesh) = findmin(tri->d²_fast(x, tri),mesh)
-
-# traverse the BVH
-import ImplicitBVH: memory_index,unsafe_isvirtual
-@inline function closest(x::SVector{D,T},bvh::ImplicitBVH.BVH,mesh;a=floatmax(T),verbose=false) where {D,T}
-    tree = bvh.tree; length_nodes = length(bvh.nodes)
-    u=ncheck=lcheck=tcheck=Int32(0) # initialize
-    # Depth-First-Search
-    i=1; while true
-        @inbounds j = memory_index(tree,i)
-        if j ≤ length_nodes # we are on a node
-            verbose && (ncheck += 1)
-            dist(x, bvh.nodes[j]) < a && (i = 2i; continue) # go deeper if closer than current best
-        else # we reached a leaf
-            verbose && (lcheck += 1)
-            if dist(x, bvh.leaves[j-length_nodes]) < a
-                verbose && (tcheck += 1)
-                @inbounds j = bvh.leaves[j-length_nodes].index # correct index in mesh
-                d = d²_fast(x, mesh[j])
-                d<a && (a=d; u=Int32(j))  # Replace current best
-            end
-        end
-        i = i>>trailing_ones(i)+1 # go to sibling, or uncle etc.
-        (i==1 || unsafe_isvirtual(tree, i)) && break # search complete!
-    end
-    verbose && println("Checked $ncheck nodes, $lcheck leaves, $tcheck triangles")
-    return a,u
-end
-
-# compute the square distance to primitive
-dist(x, b::BSphere) = max(√sum(abs2,x .- b.x) - b.r, 0)^2
-function dist(x, b::BBox)
-    c = (b.up .+ b.lo) ./ 2
-    r = (b.up .- b.lo) ./ 2
-    sum(abs2, max.(abs.(x .- c) .- r, 0))
-end
-dist(x, b::BoundingVolume) = dist(x, b.volume)
-
-# locate the closest point p to x on triangle tri
-function locate(x::SVector{T},tri::SMatrix{T}) where T
-    # unpack the triangle vertices
-    a,b,c = tri[:,1],tri[:,2],tri[:,3]
-    ab,ac,ap = b.-a,c.-a,x.-a
-    d1,d2 = sum(ab.*ap),sum(ac.*ap)
-    # is point `a` closest?
-    ((d1 ≤ 0) && (d2 ≤ 0)) && (return a)
-    # is point `b` closest?
-    bp = x.-b
-    d3,d4 = sum(ab.*bp),sum(ac.*bp)
-    ((d3 ≥ 0) && (d4 ≤ d3)) && (return b)
-    # is point `c` closest?
-    cp = x.-c
-    d5,d6 = sum(ab.*cp),sum(ac.*cp)
-    ((d6 ≥ 0) && (d5 ≤ d6)) && (return c)
-    # is segment 'ab' closest?
-    vc = d1*d4 - d3*d2
-    ((vc ≤ 0) && (d1 ≥ 0) && (d3 ≤ 0)) && (return a .+ ab.*d1 ./ (d1 - d3))
-    #  is segment 'ac' closest?
-    vb = d5*d2 - d1*d6
-    ((vb ≤ 0) && (d2 ≥ 0) && (d6 ≤ 0)) && (return a .+ ac.*d2 ./ (d2 - d6))
-    # is segment 'bc' closest?
-    va = d3*d6 - d5*d4
-    ((va ≤ 0) && (d4 ≥ d3) && (d5 ≥ d6)) && (return b .+ (c .- b) .* (d4 - d3) ./ ((d4 - d3) + (d5 - d6)))
-    # closest is interior to `abc`
-    denom = one(T) / (va + vb + vc)
-    v,w= vb*denom,vc*denom
-    return a .+ ab .* v .+ ac .* w
-end
-
-# signed distance function
-WaterLily.sdf(body::Meshbody,x,t;kwargs...) = measure(body,x,t;kwargs...)[1]
-
-using ForwardDiff
-# measure
-function WaterLily.measure(body::Meshbody,x::SVector{D,T},t;fastd²=Inf) where {D,T}
-    # map to correct location
-    ξ = body.map(x,t)
-    # before we try the bvh
-    !inside(ξ,body.bvh.nodes[1]) && return (T(4),zero(x),zero(x))
-    # locate the point on the mesh
-    d²,u = closest(ξ,body.bvh,body.mesh;a = body.boundary ? floatmax(T) : T(16))
-    u==0 && return (T(4),zero(x),zero(x)) # no triangles within distance "a"
-    # compute the normal and distance
-    n,p = normal(body.mesh[u]),SVector(locate(ξ,body.mesh[u]))
-    # signed Euclidian distance
-    d = copysign(√d²,n'*(ξ-p))
-    !body.boundary && (d = abs(d)-body.half_thk) # if the mesh is not a boundary, we need to adjust the distance
-    d^2>fastd² && return (d,zero(x),zero(x)) # skip n,V
-    # velocity at the mesh point
-    dξdx = ForwardDiff.jacobian(x->body.map(x,t), ξ)
-    dξdt = -ForwardDiff.derivative(t->body.map(x,t), t)
-    # mesh deformation velocity
-    v = get_velocity(p, body.mesh[u], body.velocity[u])
-    return (d,dξdx\n,dξdx\dξdt+v)
-end
-
-# check if a point is inside the mesh, using ray-casting
-@inline function check_inside(x₀::SVector{D,T}, bvh) where {D,T}
-    mem = typeof(bvh.nodes).name.wrapper
-    # rays in each dimension from starting point x₀
-    points, directions = mem(repeat(x₀, 1, 6,)), mem([1 -1 0 0 0 0; 0 0 1 -1 0 0; 0 0 0 0 1 -1])
-    # traverse the bvh
-    traversal = ImplicitBVH.traverse_rays(bvh, points, directions)
-    # check that we collide in each direction at least once, otherwise we are outside
-    d = sort(unique(getindex.(traversal.contacts, 2))) == collect(1:6) ? T(-8) : T(8)
-    # if we are inside, negative large distance
-    (d,zero(x₀),zero(x₀))
-end
-
-import WaterLily: @loop, update!
-"""
-    update!(body::Meshbody{T},new_mesh::AbstractArray,dt=0;kwargs...)
-
-Updates the mesh body position using the new mesh triangle coordinates.
-
-    xᵢ(t+Δt) = x[i]
-    vᵢ(t+Δt) = (xᵢ(t+Δt) - xᵢ(t))/dt
-    where `x[i]` is the new (t+Δt) position of the control point, `vᵢ` is the velocity at that control point.
-
-"""
-function update!(a::Meshbody{T},new_mesh::AbstractArray,dt=0) where T
-    Rs = CartesianIndices(a.mesh)
-    # if nonzero time step, update the velocity field
-    dt>0 && (@loop a.velocity[I] = (new_mesh[I]-a.mesh[I])/T(dt) over I in Rs)
-    @loop a.mesh[I] = new_mesh[I] over I in Rs
-    # update the BVH
-    update_bvh(a, bvh=BVH(ImplicitBVH.BBox{T}.(a.mesh), ImplicitBVH.BBox{T}))
-end
-update!(body::AbstractBody,args...) = body
-update!(body::SetBody,args...) = SetBody(body.op,update!(body.a,args...),update!(body.b,args...))
-
-import ConstructionBase: setproperties
-update_bvh(body::Meshbody; bvh) = setproperties(body, bvh=bvh)
-
-import WriteVTK: MeshCell, VTKCellTypes, vtk_grid, vtk_save
-using Printf: @sprintf
-"""
-
-    save!(writer::VTKWriter, body::Meshbody, t=writer.count[1])
-
-Saves the mesh body as a VTK file using the WriteVTK package. The file name is generated using the writer's directory name, base file name, and the current count.
-"""
-function save!(w,a::Meshbody,t=w.count[1]) #where S<:AbstractSimulation{A,B,C,D,MeshBody}
-    k = w.count[1]
-    points = zeros(Float32, 3, 3length(a.mesh))
-    for (i,el) in enumerate(Array(a.mesh))
-        points[:,3i-2:3i] = el
-    end
-    cells = [MeshCell(VTKCellTypes.VTK_TRIANGLE, TriangleFace{Int}(3i+1,3i+2,3i+3)) for i in 0:length(a.mesh)-1]
-    vtk = vtk_grid(w.dir_name*@sprintf("/%s_%06i", w.fname, k), points, cells)
-    for (name,func) in w.output_attrib
-        # point/vector data must be oriented in the same way as the mesh
-        vtk[name] = ndims(func(a))==1 ? func(a) : permutedims(func(a))
-    end
-    vtk_save(vtk); w.count[1]=k+1
-    w.collection[round(t,digits=4)]=vtk
-end
-save!(w,a::AbstractBody,t) = nothing
-save!(w,a::SetBody,t) = (save!(w,a.a,t); save!(w,a.b,t))
+include("geometry.jl")
+include("bvh.jl")
+include("measure.jl")
+include("update.jl")
+include("io.jl")
 
 export MeshBody, save!, update!
 

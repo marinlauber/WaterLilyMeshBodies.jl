@@ -20,7 +20,7 @@ dist(x, b::BoundingVolume) = dist(x, b.volume)
 # traverse the BVH
 @inline function closest(x::SVector{D,T},bvh::ImplicitBVH.BVH,mesh;init_d²=floatmax(T),verbose=false) where {D,T}
     ncheck=lcheck=tcheck=Int32(0) # initialize counts
-    best = (index=Int32(0),d²=init_d²,n=nothing,p=nothing) # initialize best element
+    best = (index=Int32(0),d²=init_d²,n=x,p=x) # initialize best element
     # Depth-First-Search
     tree = bvh.tree; length_nodes = length(bvh.nodes)
     i=Int32(1); while true
@@ -35,7 +35,7 @@ dist(x, b::BoundingVolume) = dist(x, b.volume)
                 @inbounds j = bvh.leaves[j-length_nodes].index # correct index in mesh
                 n,p = normal(mesh[j]),locate(x,mesh[j]) # expensive...
                 d² = sum(abs2,x-p)
-                ( d²<best.d² || (d²≈best.d² && abs((x-p)'n)>abs((x-best.p)'best.n)) ) && (best = (;index=Int32(j),d²,n,p))  # Replace current best
+                (best.index == 0 || d²<best.d² || (d²≈best.d² && abs((x-p)'n)>abs((x-best.p)'best.n))) && (best = (;index=Int32(j),d²,n,p))  # Replace current best
             end
         end
         i = i>>trailing_ones(i)+1 # go to sibling, or uncle etc.

@@ -25,16 +25,15 @@ function WaterLily.measure(body::Meshbody,x::SVector{D,T},t;fastd²=Inf) where {
 end
 
 function WaterLily.measure_sdf!(d::AbstractArray{T}, body::Meshbody, t=zero(T); fastd²=zero(T)) where T
-    # Get the region of interest (ROI) from the BVH, and get the signed SDF within |d|≤cutoff
-    cutoff = T(4)
-    @inside d[I] = tightsdf(body, loc(0,I,T), t, cutoff)
+    # SDF within |d|≤cutoff
+    @inside d[I] = tightsdf(body, loc(0,I,T), t, T(4))
 
     # If the mesh is not a boundary, adjust the distance and return 
     body.boundary || return @inside d[I] = abs(d[I]) - body.half_thk
 
     # Otherwise, flood-fill from the outside and make the distances negative inside the surface
-    near,reached, farinside = similar(d, Bool), similar(d, Bool), similar(d, Bool)
-    classify_from_sdf!(near, reached, farinside, d, cutoff)
+    near, reached, farinside = similar(d, Bool), similar(d, Bool), similar(d, Bool)
+    flood_fill!(near, reached, farinside, d, 1f0)
     @inside d[I] = farinside[I] ? -abs(d[I]) : d[I]
 end
 @inline function tightsdf(body, x, t, cutoff)
@@ -44,7 +43,7 @@ end
 end
 
 # Flood-fill classification helpers for measure_sdf! (boundary=true fast path)
-function classify_from_sdf!(near, reached, scratch, sdf, cutoff=4f0)
+function flood_fill!(near, reached, scratch, sdf, cutoff=4f0)
     near .= sdf .< cutoff
     r, s = reached, scratch
     fill!(r, true); r[inside(r)] .= false

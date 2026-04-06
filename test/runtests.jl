@@ -140,7 +140,7 @@ end
     near = similar(sdf, Bool)
     reached = similar(sdf, Bool)
     farinside = similar(sdf, Bool)
-    WaterLilyMeshBodies.classify_from_sdf!(near, reached, farinside, sdf, cutoff)
+    WaterLilyMeshBodies.flood_fill!(near, reached, farinside, sdf, cutoff)
     @test count(@view(farinside[6:11, 6:11])) == 36
     @test all(@view(farinside[5, 5:12]) .== false)
     @test all(@view(farinside[12, 5:12]) .== false)
@@ -149,24 +149,26 @@ end
 @testset "measure_sdf!" begin
     L = 32
     R = 0.707f0L
-    mesh_body = MeshBody(joinpath(@__DIR__, "meshes", "sphere.stl");
-        scale=1.414f0L, map=(x,t)->x .- L, boundary=true, mem=Array)
-    auto_body = AutoBody((x,t) -> √sum(abs2, x .- L) - R)
-    sim_mesh = Simulation((2L, 2L, 2L), (1,0,0), L; T, ν=1e-3, mem=Array, body=mesh_body)
-    sim_auto = Simulation((2L, 2L, 2L), (1,0,0), L; T, ν=1e-3, mem=Array, body=auto_body)
+    for mem in arrays
+        mesh_body = MeshBody(joinpath(@__DIR__, "meshes", "sphere.stl");
+            scale=1.414f0L, map=(x,t)->x .- L, boundary=true, mem)
+        auto_body = AutoBody((x,t) -> √sum(abs2, x .- L) - R)
+        sim_mesh = Simulation((2L, 2L, 2L), (1,0,0), L; T, ν=1e-3, mem, body=mesh_body)
+        sim_auto = Simulation((2L, 2L, 2L), (1,0,0), L; T, ν=1e-3, mem, body=auto_body)
 
-    measure_sdf!(sim_mesh.flow.σ, sim_mesh.body, 0f0)
-    measure_sdf!(sim_auto.flow.σ, sim_auto.body, 0f0)
-    σm, σa = sim_mesh.flow.σ, sim_auto.flow.σ
+        measure_sdf!(sim_mesh.flow.σ, sim_mesh.body, 0f0)
+        measure_sdf!(sim_auto.flow.σ, sim_auto.body, 0f0)
+        σm, σa = sim_mesh.flow.σ, sim_auto.flow.σ
 
-    # Any discrepancy should be due to triangle discretization error
-    v,I = findmax(abs.(clamp.(σm,-4,4) - clamp.(σa,-4,4)))
-    ξ = sim_mesh.body.map(SVector{3,T}(WaterLily.loc(0, I, T)), 0f0)
-    (;p) = WaterLilyMeshBodies.closest(ξ, sim_mesh.body.bvh, sim_mesh.body.mesh)
-    @test v ≈ R-√(p'p) atol=√eps(T)
+        # Any discrepancy should be due to triangle discretization error
+        v,I = findmax(abs.(clamp.(σm,-4,4) - clamp.(σa,-4,4)))
+        ξ = sim_mesh.body.map(SVector{3,T}(WaterLily.loc(0, I, T)), 0f0)
+        GPUArrays.@allowscalar (;p) = WaterLilyMeshBodies.closest(ξ, sim_mesh.body.bvh, sim_mesh.body.mesh)
+        @test v ≈ R-√(p'p) atol=√eps(T)
 
-    mismatches = findall(signbit.(σm) .!= signbit.(σa))
-    @test all(0>σa[I]>-v && 0<σm[I]<v for I in mismatches) # all sign mismatches must be on the boundary
+        mismatches = findall(signbit.(σm) .!= signbit.(σa))
+        @test GPUArrays.@allowscalar all(0>σa[I]>-v && 0<σm[I]<v for I in mismatches) # all sign mismatches must be on the boundary
+    end
 end
 
 @testset "Updates" begin

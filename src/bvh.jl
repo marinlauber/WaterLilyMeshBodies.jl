@@ -39,12 +39,11 @@ end
                 tri = @inbounds mesh[j]
                 p = locate(x,tri)
                 d² = sum(abs2,x-p)
-                if best.index == 0 || d² < best.d²
-                    n = normal(tri)
-                    best = ClosestPoint(Int32(j), d², n, p)
+                if d² < best.d²
+                    best = ClosestPoint(Int32(j), d², normal(tri), p)
                 elseif d² ≈ best.d²
                     n = normal(tri)
-                    abs((x-p)'n) > abs((x-best.p)'best.n) && (best = ClosestPoint(Int32(j), d², n, p))
+                    (best.index == 0 || abs((x-p)'n) > abs((x-best.p)'best.n)) && (best = ClosestPoint(Int32(j), d², n, p))
                 end
             end
         end

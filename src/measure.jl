@@ -39,7 +39,7 @@ and set to `√fastd²` outside this region. The method depends on `body.boundar
  - `body.boundary == true`: The sign of the distance is determined by a global flood-fill. This requires `body.mesh` to be a closed manifold.
  - `body.boundary == false`: The mesh is treated as a thin shell with half-thickness `body.half_thk`.
 """
-function WaterLily.measure_sdf!(d::AbstractArray{T}, body::MeshBody{T}, t=zero(T); fastd²=one(T)) where T
+function WaterLily.measure_sdf!(d::AbstractArray{T}, body::MeshBody{T}, t=zero(T); fastd²=1) where T
     # SDF within d²≤fastd²
     @inside d[I] = sdf(body, loc(0,I,T), t; fastd²)
 

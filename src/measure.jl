@@ -16,7 +16,7 @@ function WaterLily.measure(body::MeshBody{T},x::AbstractVector{T},t;fastd²=Inf)
     v = get_velocity(p, body.mesh[index], body.velocity[index])
     dξdt = derivative(t->body.map(x,t), t)
     # x-form back with Jacobian
-    dξdx = jacobian(x->body.map(x,t), ξ)
+    dξdx = jacobian(x->body.map(x,t), x)
     return (d,hat(dξdx'n),dξdx\(v-dξdt))
 end
 

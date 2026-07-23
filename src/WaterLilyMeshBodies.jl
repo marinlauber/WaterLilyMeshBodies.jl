@@ -73,6 +73,7 @@ include("measure.jl")
 include("update.jl")
 include("io.jl")
 include("interpolation.jl")
+include("forces.jl")
 
 export MeshBody, save!, update!
 

@@ -335,3 +335,25 @@ end
         @test ForwardDiff.derivative(t -> measure_sum(t, f), Tθ(0.3)) ≈ cpu_d rtol=1e-3
     end
 end
+
+@testset "Force test" begin
+    L = 64
+    for f ∈ arrays, Tθ ∈ (Float32, Float64)
+        # test on a sphere
+        body = MeshBody(joinpath(@__DIR__,"meshes/sphere.stl"),map=(x,t)->x.-L,scale=T(1.8L),
+                        boundary=true,mem=f)
+        sim = Simulation((2L,2L,2L),(1,0,0),L;body,mem=f)
+        sf = SurfaceForces(sim.body)
+        apply!(x->x[1], sim.flow.p)
+        vol = 2WaterLily.pressure_force(sf, sim, δ=1.0f0)./(4/3*π*(0.9L)^3) # should be 1.0
+        @test all(abs.(vol .- [1,0,0]) .< 1e-2)
+        # test on a box
+        body = MeshBody(joinpath(@__DIR__,"meshes/box.stl"),map=(x,t)->x.-L,scale=T(L/2),
+                        boundary=true,mem=f)
+        sim = Simulation((2L,2L,2L) ,(1,0,0),L;body,mem=f)
+        sf = SurfaceForces(sim.body)
+        apply!(x->x[1], sim.flow.p)
+        vol = 2WaterLily.pressure_force(sf, sim, δ=1.0f0)./(L^3) # should be 1.0
+        @test all(abs.(vol .- [1,0,0]) .< 4e-2)
+    end
+end
